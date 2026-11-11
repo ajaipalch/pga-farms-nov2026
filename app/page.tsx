@@ -2,6 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 // Unsplash high-res background image slides for PGA / Agriculture theme
 const carouselImages = [
@@ -12,6 +19,9 @@ const carouselImages = [
 ]
 
 export default function Home() {
+  const router = useRouter()
+const [loading, setLoading] = useState(false)
+const [error, setError] = useState('')
   const [currentSlide, setCurrentSlide] = useState(0)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
   const [adminEmail, setAdminEmail] = useState('')
@@ -25,11 +35,79 @@ export default function Home() {
     return () => clearInterval(timer)
   }, [])
 
-  const handleAdminLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Admin login logic will connect to Supabase Auth in upcoming step
-    console.log('Admin login attempt:', adminEmail)
+    setLoading(true)
+    setError('')
+
+    console.log('1. Attempting Supabase Auth for:', adminEmail)
+
+    // 1. Authenticate with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: adminEmail,
+      password: adminPassword,
+    })
+
+    if (authError) {
+      console.error('Auth Error:', authError.message)
+      setError(authError.message)
+      setLoading(false)
+      return
+    }
+
+    const userId = authData.user?.id
+    console.log('2. Auth successful. User ID:', userId)
+
+    // 2. Check if user exists in the separate ADMINS table
+    const { data: adminRecord, error: adminQueryError } = await supabase
+      .from('admins')
+      .select('user_id')
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    console.log('3. Admin query result:', { adminRecord, adminQueryError })
+
+    if (adminRecord) {
+  console.log('4. User is an ADMIN. Redirecting to /admin...')
+  setIsAdminModalOpen(false) // <--- Changed from setIsLoginModalOpen
+  router.push('/admin')
+  setLoading(false)
+  return
+}
+   
+
+    // 3. Otherwise, check standard member profile status
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('status')
+      .eq('id', userId)
+      .maybeSingle()
+
+    console.log('5. Profile query result:', { profile, profileError })
+
+    if (!profile) {
+      console.error('No profile found in profiles table.')
+      setError('No profile found for this account.')
+      await supabase.auth.signOut()
+      setLoading(false)
+      return
+    }
+
+    if (profile.status === 'pending') {
+      setError('Your account is still pending admin approval.')
+      await supabase.auth.signOut()
+    } else if (profile.status === 'rejected') {
+      setError('Your account application was rejected.')
+      await supabase.auth.signOut()
+    } else {
+  console.log('6. Member approved. Redirecting to /mem_dashboard...')
+  setIsAdminModalOpen(false) // <--- Changed from setIsLoginModalOpen
+  router.push('/mem_dashboard')
+    }
+
+    setLoading(false)
   }
+  
 
   return (
     <div className="bg-slate-900 font-sans text-white antialiased min-h-screen flex flex-col">
@@ -71,7 +149,7 @@ export default function Home() {
         <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs" />
 
         {/* Hero Content */}
-        <div className="relative z-10 text-center max-w-2xl px-6 pt-20">
+        <div className="relative z-10 text-center max-w-4xl px-6 pt-20">
           <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight leading-tight mb-6">
             Connected Community, <span className="text-indigo-400">Simplified Management.</span>
           </h1>
@@ -149,16 +227,24 @@ export default function Home() {
               onClick={() => setIsAdminModalOpen(false)}
               className="absolute top-4 right-4 text-slate-400 hover:text-white transition"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              {/* SVG Close Button Fix */}
+<svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+</svg>
+              
             </button>
 
             <h2 className="text-2xl font-bold text-white mb-6 text-center">
               Admin Access
             </h2>
 
-            <form onSubmit={handleAdminLogin} className="space-y-4">
+            {error && (
+  <div className="bg-red-500/10 border border-red-500 text-red-500 text-sm p-3 rounded-lg mb-4 text-center">
+    {error}
+  </div>
+)}
+
+            <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">
                   Admin Email
